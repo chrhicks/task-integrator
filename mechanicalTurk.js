@@ -100,10 +100,10 @@ exports.upload = function(event, lambdaContext) {
     .then(setupNotifications.bind(context))
     .then(function(hitIds) {
       lambdaContext.succeed("[" + hitIds.length + "] HITs created.");
-    })
-    .catch(error);
-  });
-};
+    });
+  })
+  .catch(error);
+}
 
 exports.export = function(event, lambdaContext) {
   console.log('Running task-integrator Mechanical Turk export function');
@@ -151,7 +151,8 @@ exports.export = function(event, lambdaContext) {
       console.log('[' + flattened.join(',') + '] messages created');
       lambdaContext.succeed(flattened.length + ' messages pushed to SNS.');
     });
-  });
+  })
+  .catch(error);
 }
 
 // --- Private helper functions ---
