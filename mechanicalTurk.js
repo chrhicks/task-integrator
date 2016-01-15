@@ -103,7 +103,7 @@ exports.upload = function(event, lambdaContext) {
     });
   })
   .catch(error);
-}
+};
 
 exports.export = function(event, lambdaContext) {
   console.log('Running task-integrator Mechanical Turk export function');
