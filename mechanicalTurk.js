@@ -25,58 +25,85 @@ exports.ping = function(event, lambdaContext) {
   });
 };
 
+/**
+ * Example 'flattening' of promise tree.
+ *
+ * 1. Break up .then() functions into separate named functions
+ * 2. Organize the returned data so the then calls can be chained.
+ */
 exports.upload = function(event, lambdaContext) {
   console.log('Running task-integrator Mechanical Turk upload function');
 
+  /**
+   * Create BaseRequest from config layouts
+   */
+  function getBaseRequest (context, record) {
+    var objectKey = record.s3.object.key;
+    var hitLayoutId = objectKey.substr(0, objectKey.indexOf('/'));
+    if (hitLayoutId) {
+      var baseRequest = context.config.layouts[hitLayoutId];
+      if (baseRequest) {
+        baseRequest["HITLayoutId"] = hitLayoutId;
+        return baseRequest;
+      } else {
+        throw "HitLayoutId [" + hitLayoutId + "] does not have an entry in configuration.";
+      }
+    } else {
+      throw "Object [" + objectKey + "] does not have a HITLayoutId in its path.";
+    }
+  }
+
+  /**
+   * Fetch the S3 Object for the record
+   */
+  function createHitsForCsv (context, record) {
+    getBaseRequest(context, record).then(function (baseRequest) {
+      return s3
+        .getObjectAsync({
+          Bucket: record.s3.bucket.name,
+          Key: record.s3.object.key
+        })
+        .then(function(s3Object) {
+          return createHitsForCsv(s3Object.Body, baseRequest, context.mturkClient);
+        });
+    });
+  }
+
+  /**
+   * Set up notifications for the the HITType. Only needs to happen once for
+   * the entire batch.              [description]
+   */
+  function setupNotifications (context, recordsHITIds) {
+    var hitIds = flatten(recordsHITIds);
+    if (hitIds.length > 0) {
+      return setupNotificationsForHit(hitIds[0], context.mturkClient, context.config.turk_notification_queue).then(function() {
+        return hitIds;
+      });
+    } else {
+      return hitIds;
+    }
+  }
+
   var stackName = getStackName(lambdaContext.functionName, 'MTurkImporterFunction');
+
+  /**
+   * Flow of code is much easier to tease out now. Aka:
+   *
+   * 1. For each Record, setup hits for the csv
+   * 2. Make sure notifcations are set up
+   * 3. Let the context know all is good
+   */
   init(stackName)
   .then(function(context) {
     return Promise
-    .map(
-      event.Records,
-      function(record) {
-        var objectKey = record.s3.object.key;
-        var hitLayoutId = objectKey.substr(0, objectKey.indexOf('/'));
-        if (hitLayoutId) {
-          var baseRequest = context.config.layouts[hitLayoutId];
-          if (baseRequest) {
-            console.log("HITLayoutId: " + hitLayoutId);
-            return s3
-            .getObjectAsync({
-              Bucket: record.s3.bucket.name,
-              Key: record.s3.object.key
-            })
-            .then(function(s3Object) {
-              baseRequest["HITLayoutId"] = hitLayoutId;
-              return createHitsForCsv(s3Object.Body, baseRequest, context.mturkClient);
-            });
-          } else {
-            throw "HitLayoutId [" + hitLayoutId + "] does not have an entry in configuration.";
-          }
-        } else {
-          throw "Object [" + objectKey + "] does not have a HITLayoutId in its path.";
-        }
-      }
-    )
-    .then(function(recordsHITIds) {
-      var hitIds = flatten(recordsHITIds);
-      if (hitIds.length > 0) {
-        // Ensure that notifications are turned on for the HITType.
-        // This will be the same for all tasks in the batch, so only
-        // need to do this once.
-        return setupNotificationsForHit(hitIds[0], context.mturkClient, context.config.turk_notification_queue).then(function() {
-          return hitIds;
-        });
-      } else {
-        return hitIds;
-      }
-    })
+    .map(event.Records, createHitsForCsv.bind(context))
+    .then(setupNotifications.bind(context))
     .then(function(hitIds) {
       lambdaContext.succeed("[" + hitIds.length + "] HITs created.");
     })
     .catch(error);
   });
-}
+};
 
 exports.export = function(event, lambdaContext) {
   console.log('Running task-integrator Mechanical Turk export function');
